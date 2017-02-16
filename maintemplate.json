@@ -2,17 +2,17 @@
   "$schema": "http://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json",
   "contentVersion": "1.0.0.0",
   "parameters": {
-    "vmSku": {
+    "instanceType": {
       "type": "string",
-      "defaultValue": "Standard_D3v2",
+      "defaultValue": "Standard_A3",
       "metadata": {
         "description": "Size of VMs in the VM Scale Set."
       }
     },
-    "vmssName": {
-      "type": "string",
-      "metadata": {
-        "description": "String used as a base for naming resources. Must be 3-61 characters in length and globally unique across Azure. A hash is prepended to this string for some resources, and resource-specific information is appended."
+    "vmssName":{
+      "type":"string",
+      "metadata":{
+        "description":"String used as a base for naming resources. Must be 3-61 characters in length and globally unique across Azure. A hash is prepended to this string for some resources, and resource-specific information is appended."
       },
       "maxLength": 61
     },
@@ -21,7 +21,6 @@
       "metadata": {
         "description": "Number of VM instances (100 or less)."
       },
-      "defaultValue": 2,
       "maxValue": 100
     },
     "adminUsername": {
@@ -35,59 +34,174 @@
       "metadata": {
         "description": "Admin password on all VMs."
       }
-    },
-    "baseUrl": {
-      "type": "string",
-      "defaultValue": "https://raw.githubusercontent.com/gregcoward/multinicmultiip/master/",
-      "metadata": {
-        "description": "The base URL for marketplace deployment.",
-        "artifactsBaseUrl": ""
-      }
-    },
+    }
   },
   "variables": {
-    "apiVersionCompute": "2016-03-30",
-    "apiVersionNetwork": "2015-06-15",
-    "apiVersionStorage": "2015-06-15",
-    "imageReference": {
+    "storageAccountType": "Standard_LRS",
+    "namingInfix": "[toLower(substring(concat(parameters('vmssName'), uniqueString(resourceGroup().id)), 0, 9))]",
+    "longNamingInfix": "[toLower(parameters('vmssName'))]",
+    "newStorageAccountSuffix": "[concat(variables('namingInfix'), 'sa')]",
+    "uniqueStringArray": [
+      "[concat(uniqueString(concat(resourceGroup().id, variables('newStorageAccountSuffix'), '0')))]",
+      "[concat(uniqueString(concat(resourceGroup().id, variables('newStorageAccountSuffix'), '1')))]",
+      "[concat(uniqueString(concat(resourceGroup().id, variables('newStorageAccountSuffix'), '2')))]",
+      "[concat(uniqueString(concat(resourceGroup().id, variables('newStorageAccountSuffix'), '3')))]",
+      "[concat(uniqueString(concat(resourceGroup().id, variables('newStorageAccountSuffix'), '4')))]"
+    ],
+    "saCount": "[length(variables('uniqueStringArray'))]",
+    "vhdContainerName": "[concat(variables('namingInfix'), 'vhd')]",
+    "osDiskName": "[concat(variables('namingInfix'), 'osdisk')]",
+    "addressPrefix": "10.0.0.0/16",
+    "subnetPrefix": "10.0.0.0/24",
+    "virtualNetworkName": "[concat(variables('namingInfix'), 'vnet')]",
+    "publicIPAddressName": "[concat(variables('namingInfix'), 'pip')]",
+    "subnetName": "[concat(variables('namingInfix'), 'subnet')]",
+    "loadBalancerName": "[concat(variables('namingInfix'), 'lb')]",
+    "publicIPAddressID": "[resourceId('Microsoft.Network/publicIPAddresses',variables('publicIPAddressName'))]",
+    "lbID": "[resourceId('Microsoft.Network/loadBalancers',variables('loadBalancerName'))]",
+    "natPoolName": "[concat(variables('namingInfix'), 'natpoolssh')]",
+    "natPoolName2": "[concat(variables('namingInfix'), 'natpoolgui')]",
+    "bePoolName": "[concat(variables('namingInfix'), 'bepool')]",
+    "natStartPort": 50000,
+    "natEndPort": 50119,
+    "natBackendPort": 22,
+    "natStartPort2": 6443,
+    "natEndPort2": 6525,
+    "natBackendPort2": 443,
+    
+    "nicName": "[concat(variables('namingInfix'), 'nic')]",
+    "ipConfigName": "[concat(variables('namingInfix'), 'ipconfig')]",
+    "frontEndIPConfigID": "[concat(variables('lbID'),'/frontendIPConfigurations/loadBalancerFrontEnd')]",
+    "osType": {
       "publisher": "f5-networks",
       "offer": "f5-big-ip-hourly",
       "sku": "f5-bigip-virtual-edition-1g-best-hourly",
       "version": "latest"
     },
-    "namingInfix": "[toLower(substring(concat(parameters('vmssName'), uniqueString(resourceGroup().id)), 0, 9))]",
-    "vnetName": "vnet",
-    "subnetName": "subnet",
-    "vnetID": "[resourceId('Microsoft.Network/virtualNetworks',variables('vnetName'))]",
-    "subnetRef": "[concat(variables('vnetID'),'/subnets/',variables('subnetName'))]",
-    "publicIPAddressName": "pip",
-    "loadBalancerName": "loadBalancer",
-    "loadBalancerFrontEndName": "loadBalancerFrontEnd",
-    "loadBalancerBackEndName": "loadBalancerBackEnd",
-    "loadBalancerProbeName": "loadBalancerHttpProbe",
-    "loadBalancerNatPoolName": "loadBalancerNatPool",
-    "scriptName": "o365FedDeploy.sh",
-    "scriptLoc": "[concat(parameters('baseUrl'),'/',variables('scriptName'))]",
-    "iappTemplate": "f5.microsoft_office_365_idp.v1.1.0.tmpl",
-    "iappUrl": "[concat(parameters('baseUrl'),'/',variables('iappTemplate'))]",
-    "runScripts": "runScripts.js",
-    "runScriptsUrl": "[concat(parameters('baseUrl'),'/',variables('runScripts'))]",
-    "f5CloudLibsTag": "F5Networks-f5-cloud-libs-236d600.tar.gz",
-    "f5CloudLibsTagUrl": "[concat(parameters('baseUrl'),'/',variables('f5CloudLibsTag'))]",
-    "commandArgs": "[concat(' -p ',variables('appPort'),' -e ', variables('entityId'),' -d ', parameters('authFqdn'),' -a ', parameters('authIp'),' -f ', parameters('domainfqdn'),' -c ', parameters('sslCert'),' -w ', parameters('sslPswd'),' -x ', parameters('adminPassword'),' -u ', variables('iappUrl'))]"
+    "imageReference": "[variables('osType')]",
+    "plan": {
+        "name": "f5-bigip-virtual-edition-1g-best-hourly",
+        "publisher": "f5-networks",
+        "product": "f5-big-ip-hourly"
+      },
+    "computeApiVersion": "2016-03-30",
+    "networkApiVersion": "2016-03-30",
+    "storageApiVersion": "2015-06-15",
+    "insightsApiVersion": "2015-04-01"
   },
   "resources": [
     {
-      "type": "Microsoft.Compute/virtualMachineScaleSets",
-      "name": "[parameters('vmssName')]",
+      "type": "Microsoft.Network/virtualNetworks",
+      "name": "[variables('virtualNetworkName')]",
       "location": "[resourceGroup().location]",
-      "apiVersion": "[variables('apiVersionCompute')]",
+      "apiVersion": "[variables('networkApiVersion')]",
+      "properties": {
+        "addressSpace": {
+          "addressPrefixes": [
+            "[variables('addressPrefix')]"
+          ]
+        },
+        "subnets": [
+          {
+            "name": "[variables('subnetName')]",
+            "properties": {
+              "addressPrefix": "[variables('subnetPrefix')]"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts",
+      "name": "[concat(variables('uniqueStringArray')[copyIndex()], variables('newStorageAccountSuffix'))]",
+      "location": "[resourceGroup().location]",
+      "apiVersion": "[variables('storageApiVersion')]",
+      "copy": {
+        "name": "storageLoop",
+        "count": "[variables('saCount')]"
+      },
+      "properties": {
+        "accountType": "[variables('storageAccountType')]"
+      }
+    },
+    {
+      "type": "Microsoft.Network/publicIPAddresses",
+      "name": "[variables('publicIPAddressName')]",
+      "location": "[resourceGroup().location]",
+      "apiVersion": "[variables('networkApiVersion')]",
+      "properties": {
+        "publicIPAllocationMethod": "Dynamic",
+        "dnsSettings": {
+          "domainNameLabel": "[variables('longNamingInfix')]"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Network/loadBalancers",
+      "name": "[variables('loadBalancerName')]",
+      "location": "[resourceGroup().location]",
+      "apiVersion": "[variables('networkApiVersion')]",
       "dependsOn": [
-        "[concat('Microsoft.Network/virtualNetworks/', variables('vnetName'))]",
-        "[resourceId('Microsoft.Network/loadBalancers', variables('loadBalancerName'))]"
+        "[concat('Microsoft.Network/publicIPAddresses/', variables('publicIPAddressName'))]"
+      ],
+      "properties": {
+        "frontendIPConfigurations": [
+          {
+            "name": "LoadBalancerFrontEnd",
+            "properties": {
+              "publicIPAddress": {
+                "id": "[variables('publicIPAddressID')]"
+              }
+            }
+          }
+        ],
+        "backendAddressPools": [
+          {
+            "name": "[variables('bePoolName')]"
+          }
+        ],
+        "inboundNatPools": [
+          {
+            "name": "[variables('natPoolName')]",
+            "properties": {
+              "frontendIPConfiguration": {
+                "id": "[variables('frontEndIPConfigID')]"
+              },
+              "protocol": "tcp",
+              "frontendPortRangeStart": "[variables('natStartPort')]",
+              "frontendPortRangeEnd": "[variables('natEndPort')]",
+              "backendPort": "[variables('natBackendPort')]"
+            }
+          },
+          {
+            "name": "[variables('natPoolName2')]",
+            "properties": {
+              "frontendIPConfiguration": {
+                "id": "[variables('frontEndIPConfigID')]"
+              },
+              "protocol": "tcp",
+              "frontendPortRangeStart": "[variables('natStartPort2')]",
+              "frontendPortRangeEnd": "[variables('natEndPort2')]",
+              "backendPort": "[variables('natBackendPort2')]"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Compute/virtualMachineScaleSets",
+      "name": "[variables('namingInfix')]",
+      "location": "[resourceGroup().location]",
+      "apiVersion": "[variables('computeApiVersion')]",
+      "plan": "[variables('plan')]",
+      "dependsOn": [
+        "storageLoop",
+        "[concat('Microsoft.Network/loadBalancers/', variables('loadBalancerName'))]",
+        "[concat('Microsoft.Network/virtualNetworks/', variables('virtualNetworkName'))]"
       ],
       "sku": {
-        "name": "[parameters('vmSku')]",
+        "name": "[parameters('instanceType')]",
+        "tier": "Standard",
         "capacity": "[parameters('instanceCount')]"
       },
       "properties": {
@@ -98,36 +212,45 @@
         "virtualMachineProfile": {
           "storageProfile": {
             "osDisk": {
+              "vhdContainers": [
+                "[concat('https://', variables('uniqueStringArray')[0], variables('newStorageAccountSuffix'), '.blob.core.windows.net/', variables('vhdContainerName'))]",
+                "[concat('https://', variables('uniqueStringArray')[1], variables('newStorageAccountSuffix'), '.blob.core.windows.net/', variables('vhdContainerName'))]",
+                "[concat('https://', variables('uniqueStringArray')[2], variables('newStorageAccountSuffix'), '.blob.core.windows.net/', variables('vhdContainerName'))]",
+                "[concat('https://', variables('uniqueStringArray')[3], variables('newStorageAccountSuffix'), '.blob.core.windows.net/', variables('vhdContainerName'))]",
+                "[concat('https://', variables('uniqueStringArray')[4], variables('newStorageAccountSuffix'), '.blob.core.windows.net/', variables('vhdContainerName'))]"
+              ],
+              "name": "[variables('osDiskName')]",
+              "caching": "ReadOnly",
               "createOption": "FromImage"
             },
             "imageReference": "[variables('imageReference')]"
           },
           "osProfile": {
-            "computerNamePrefix": "[parameters('vmssName')]",
+            "computerNamePrefix": "[variables('namingInfix')]",
             "adminUsername": "[parameters('adminUsername')]",
             "adminPassword": "[parameters('adminPassword')]"
           },
           "networkProfile": {
             "networkInterfaceConfigurations": [
               {
-                "name": "nic",
+                "name": "[variables('nicName')]",
                 "properties": {
                   "primary": "true",
                   "ipConfigurations": [
                     {
-                      "name": "ipconfig",
+                      "name": "[variables('ipConfigName')]",
                       "properties": {
                         "subnet": {
-                          "id": "[variables('subnetRef')]"
+                          "id": "[concat('/subscriptions/', subscription().subscriptionId,'/resourceGroups/', resourceGroup().name, '/providers/Microsoft.Network/virtualNetworks/', variables('virtualNetworkName'), '/subnets/', variables('subnetName'))]"
                         },
                         "loadBalancerBackendAddressPools": [
                           {
-                            "id": "[concat('/subscriptions/', subscription().subscriptionId,'/resourceGroups/', resourceGroup().name, '/providers/Microsoft.Network/loadBalancers/', variables('loadBalancerName'), '/backendAddressPools/', variables('loadBalancerBackEndName'))]"
+                            "id": "[concat('/subscriptions/', subscription().subscriptionId,'/resourceGroups/', resourceGroup().name, '/providers/Microsoft.Network/loadBalancers/', variables('loadBalancerName'), '/backendAddressPools/', variables('bePoolName'))]"
                           }
                         ],
                         "loadBalancerInboundNatPools": [
                           {
-                            "id": "[concat('/subscriptions/', subscription().subscriptionId,'/resourceGroups/', resourceGroup().name, '/providers/Microsoft.Network/loadBalancers/', variables('loadBalancerName'), '/inboundNatPools/', variables('loadBalancerNatPoolName'))]"
+                            "id": "[concat('/subscriptions/', subscription().subscriptionId,'/resourceGroups/', resourceGroup().name, '/providers/Microsoft.Network/loadBalancers/', variables('loadBalancerName'), '/inboundNatPools/', variables('natPoolName'))]"
                           }
                         ]
                       }
@@ -141,106 +264,65 @@
       }
     },
     {
-      "type": "Microsoft.Network/virtualNetworks",
-      "name": "[variables('vnetName')]",
+      "type": "Microsoft.Insights/autoscaleSettings",
+      "apiVersion": "[variables('insightsApiVersion')]",
+      "name": "autoscalewad",
       "location": "[resourceGroup().location]",
-      "apiVersion": "2016-03-30",
-      "properties": {
-        "addressSpace": {
-          "addressPrefixes": [
-            "10.0.0.0/16"
-          ]
-        },
-        "subnets": [
-          {
-            "name": "[variables('subnetName')]",
-            "properties": {
-              "addressPrefix": "10.0.0.0/24"
-            }
-          }
-        ]
-      }
-    },
-    {
-      "type": "Microsoft.Network/publicIPAddresses",
-      "name": "[variables('publicIPAddressName')]",
-      "location": "[resourceGroup().location]",
-      "apiVersion": "2016-06-01",
-      "properties": {
-        "publicIPAllocationMethod": "Dynamic",
-        "dnsSettings": {
-          "domainNameLabel": "[toLower(parameters('vmssName'))]"
-        }
-      }
-    },
-    {
-      "type": "Microsoft.Network/loadBalancers",
-      "name": "[variables('loadBalancerName')]",
-      "location": "[resourceGroup().location]",
-      "apiVersion": "2016-06-01",
       "dependsOn": [
-        "[concat('Microsoft.Network/publicIPAddresses/', variables('publicIPAddressName'))]"
+        "[concat('Microsoft.Compute/virtualMachineScaleSets/', variables('namingInfix'))]"
       ],
       "properties": {
-        "frontendIPConfigurations": [
+        "name": "autoscalewad",
+        "targetResourceUri": "[concat('/subscriptions/',subscription().subscriptionId, '/resourceGroups/',  resourceGroup().name, '/providers/Microsoft.Compute/virtualMachineScaleSets/', variables('namingInfix'))]",
+        "enabled": true,
+        "profiles": [
           {
-            "name": "[variables('loadBalancerFrontEndName')]",
-            "properties": {
-              "publicIPAddress": {
-                "id": "[resourceId('Microsoft.Network/publicIPAddresses', variables('publicIPAddressName'))]"
+            "name": "Profile1",
+            "capacity": {
+              "minimum": "1",
+              "maximum": "10",
+              "default": "1"
+            },
+            "rules": [
+              {
+                "metricTrigger": {
+                  "metricName": "\\Processor\\PercentProcessorTime",
+                  "metricNamespace": "",
+                  "metricResourceUri": "[concat('/subscriptions/',subscription().subscriptionId, '/resourceGroups/',  resourceGroup().name, '/providers/Microsoft.Compute/virtualMachineScaleSets/', variables('namingInfix'))]",
+                  "timeGrain": "PT1M",
+                  "statistic": "Average",
+                  "timeWindow": "PT5M",
+                  "timeAggregation": "Average",
+                  "operator": "GreaterThan",
+                  "threshold": 10.0
+                },
+                "scaleAction": {
+                  "direction": "Increase",
+                  "type": "ChangeCount",
+                  "value": "1",
+                  "cooldown": "PT1M"
+                }
+              },
+              {
+                "metricTrigger": {
+                  "metricName": "\\Processor\\PercentProcessorTime",
+                  "metricNamespace": "",
+                  "metricResourceUri": "[concat('/subscriptions/',subscription().subscriptionId, '/resourceGroups/',  resourceGroup().name, '/providers/Microsoft.Compute/virtualMachineScaleSets/', variables('namingInfix'))]",
+                  "timeGrain": "PT1M",
+                  "statistic": "Average",
+                  "timeWindow": "PT5M",
+                  "timeAggregation": "Average",
+                  "operator": "LessThan",
+                  "threshold": 5.0
+                },
+                "scaleAction": {
+                  "direction": "Decrease",
+                  "type": "ChangeCount",
+                  "value": "1",
+                  "cooldown": "PT5M"
+                }
               }
-            }
-          }
-        ],
-        "backendAddressPools": [
-          {
-            "name": "[variables('loadBalancerBackendName')]"
-          }
-        ],
-        "loadBalancingRules": [
-          {
-            "name": "roundRobinLBRule",
-            "properties": {
-              "frontendIPConfiguration": {
-                "id": "[concat(resourceId('Microsoft.Network/loadBalancers', variables('loadBalancerName')), '/frontendIPConfigurations/', variables('loadBalancerFrontEndName'))]"
-              },
-              "backendAddressPool": {
-                "id": "[concat(resourceId('Microsoft.Network/loadBalancers', variables('loadBalancerName')), '/backendAddressPools/', variables('loadBalancerBackendName'))]"
-              },
-              "protocol": "tcp",
-              "frontendPort": 80,
-              "backendPort": 80,
-              "enableFloatingIP": false,
-              "idleTimeoutInMinutes": 5,
-              "probe": {
-                "id": "[concat(resourceId('Microsoft.Network/loadBalancers', variables('loadBalancerName')), '/probes/', variables('loadBalancerProbeName'))]"
-              }
-            }
-          }
-        ],
-        "probes": [
-          {
-            "name": "[variables('loadBalancerProbeName')]",
-            "properties": {
-              "protocol": "tcp",
-              "port": 80,
-              "intervalInSeconds": "5",
-              "numberOfProbes": "2"
-            }
-          }
-        ],
-        "inboundNatPools": [
-          {
-            "name": "[variables('loadBalancerNatPoolName')]",
-            "properties": {
-              "frontendIPConfiguration": {
-                "id": "[concat(resourceId('Microsoft.Network/loadBalancers', variables('loadBalancerName')), '/frontendIPConfigurations/', variables('loadBalancerFrontEndName'))]"
-              },
-              "protocol": "tcp",
-              "frontendPortRangeStart": "50000",
-              "frontendPortRangeEnd": "50019",
-              "backendPort": "3389"
-            }
+            ]
           }
         ]
       }
